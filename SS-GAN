@@ -1,0 +1,117 @@
+# SS_GAN_Training.py
+
+import tensorflow as tf
+from tensorflow.keras import layers, models
+import numpy as np
+from ML_ABC import ML_ABC  # Import the ML-ABC algorithm
+
+# Self-Attention Layer for the Generator and Discriminator
+class SelfAttention(layers.Layer):
+    def __init__(self, channels):
+        super(SelfAttention, self).__init__()
+        self.channels = channels
+        self.query = layers.Conv2D(channels, kernel_size=1)
+        self.key = layers.Conv2D(channels, kernel_size=1)
+        self.value = layers.Conv2D(channels, kernel_size=1)
+
+    def call(self, inputs):
+        query = self.query(inputs)
+        key = self.key(inputs)
+        value = self.value(inputs)
+        attention = tf.matmul(query, key, transpose_b=True)
+        attention = tf.nn.softmax(attention)
+        out = tf.matmul(attention, value)
+        return out
+
+# Define the Generator with Reconstruction Loss
+def build_generator():
+    inputs = layers.Input(shape=(100,))
+    x = layers.Dense(8 * 8 * 256)(inputs)
+    x = layers.Reshape((8, 8, 256))(x)
+    x = SelfAttention(256)(x)
+    x = layers.UpSampling2D()(x)
+    x = layers.Conv2DTranspose(128, 3, activation='relu', strides=2, padding='same')(x)
+    x = layers.Conv2DTranspose(64, 3, activation='relu', strides=2, padding='same')(x)
+    x = layers.Conv2DTranspose(3, 3, activation='sigmoid', padding='same')(x)
+    model = models.Model(inputs, x)
+    return model
+
+# Discriminator with Self-Attention
+def build_discriminator():
+    inputs = layers.Input(shape=(224, 224, 3))
+    x = layers.Conv2D(64, 3, strides=2, padding='same')(inputs)
+    x = SelfAttention(64)(x)
+    x = layers.Conv2D(128, 3, strides=2, padding='same')(x)
+    x = layers.Conv2D(256, 3, strides=2, padding='same')(x)
+    x = layers.Flatten()(x)
+    x = layers.Dense(1, activation='sigmoid')(x)
+    model = models.Model(inputs, x)
+    return model
+
+# Reconstruction Loss
+def reconstruction_loss(real_samples, fake_samples):
+    return tf.reduce_mean(tf.square(real_samples - fake_samples))
+
+# Consistency Regularization Loss for the Discriminator
+def consistency_regularization(original, augmented):
+    return tf.reduce_mean(tf.square(original - augmented))
+
+# Pseudo-Labeling for Unlabeled Data
+def pseudo_labeling(predictions, threshold=0.9):
+    return tf.cast(tf.greater(predictions, threshold), dtype='float32')
+
+# Generator and Discriminator Losses
+def generator_loss(d_fake_output, fake_samples, real_samples, lambda_reconstruction=10):
+    unsupervised_loss = tf.reduce_mean(tf.keras.losses.binary_crossentropy(tf.ones_like(d_fake_output), d_fake_output))
+    rec_loss = reconstruction_loss(real_samples, fake_samples)
+    return unsupervised_loss + lambda_reconstruction * rec_loss
+
+def discriminator_loss(d_real_output, d_fake_output):
+    real_loss = tf.reduce_mean(tf.keras.losses.binary_crossentropy(tf.ones_like(d_real_output), d_real_output))
+    fake_loss = tf.reduce_mean(tf.keras.losses.binary_crossentropy(tf.zeros_like(d_fake_output), d_fake_output))
+    return real_loss + fake_loss
+
+# Initialize the ML-ABC optimizer for SS-GAN hyperparameters
+x_min = np.array([0.0001, 16, 64, 0.0001, 0, 0.5, 1])  # Minimum values for [learning rate, batch size, epoch, ...]
+x_max = np.array([0.1, 512, 1024, 1, 5, 1, 10])  # Maximum values for [learning rate, batch size, epoch, ...]
+
+# Initialize ML-ABC optimizer
+ml_abc = ML_ABC(num_bees=20, num_dimensions=7, x_min=x_min, x_max=x_max, max_cycles=50, F=0.5, trial_limit=5)
+
+# Run the optimization
+best_solution, best_fitness = ml_abc.optimize()
+
+# Extract the best hyperparameters for SS-GAN
+best_learning_rate, best_batch_size, best_epoch, best_lambda_reconstruction, best_dropout_rate, best_activation, best_noise_size = best_solution
+
+# Configure the optimizer for SS-GAN
+optimizer = tf.keras.optimizers.Adam(learning_rate=best_learning_rate)
+
+# Example: Train SS-GAN with optimized hyperparameters
+for epoch in range(best_epoch):
+    print(f"Training Epoch {epoch+1}/{best_epoch}")
+    for batch in range(0, len(train_dataset), best_batch_size):
+        real_images = train_dataset[batch: batch + best_batch_size]  # Just an example, use real data
+        noise = tf.random.normal([best_batch_size, 100])  # Noise for generator
+
+        fake_images = generator(noise, training=True)
+        d_real_output = discriminator(real_images, training=True)
+        d_fake_output = discriminator(fake_images, training=True)
+
+        # Calculate losses
+        d_loss = discriminator_loss(d_real_output, d_fake_output)
+        g_loss = generator_loss(d_fake_output, fake_images, real_images, lambda_reconstruction=best_lambda_reconstruction)
+
+        # Backpropagation
+        with tf.GradientTape() as tape:
+            grads = tape.gradient(d_loss, discriminator.trainable_variables)
+            optimizer.apply_gradients(zip(grads, discriminator.trainable_variables))
+
+        with tf.GradientTape() as tape:
+            grads = tape.gradient(g_loss, generator.trainable_variables)
+            optimizer.apply_gradients(zip(grads, generator.trainable_variables))
+
+    # At the end of the training process
+    print(f"Epoch {epoch+1} - Generator Loss: {g_loss}, Discriminator Loss: {d_loss}")
+
+print(f"Training completed with best fitness value: {best_fitness}")
