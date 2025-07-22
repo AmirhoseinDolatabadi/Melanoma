@@ -1,0 +1,151 @@
+# ML_ABC.py
+
+import numpy as np
+import tensorflow as tf
+from SS_GAN_Training import build_generator, build_discriminator  # Import the model architecture
+
+# Fitness Function for evaluating the quality of solutions
+def fitness_function(solution):
+    # Extract the hyperparameters from the solution
+    learning_rate, batch_size, epochs, lambda_reconstruction, dropout_rate, activation, noise_size = solution
+    
+    # Define the optimizer based on the learning rate from the solution
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+
+    # Create the generator and discriminator models
+    generator = build_generator()
+    discriminator = build_discriminator()
+
+    # Example: Create a simple dummy dataset (replace with actual dataset for real experiments)
+    train_dataset = np.random.rand(100, 224, 224, 3)  # Random image dataset
+    test_dataset = np.random.rand(20, 224, 224, 3)   # Random test dataset
+
+    # Train the SS-GAN with the current hyperparameters
+    for epoch in range(epochs):
+        for batch in range(0, len(train_dataset), batch_size):
+            real_images = train_dataset[batch: batch + batch_size]  # Just an example
+            noise = tf.random.normal([batch_size, noise_size])  # Noise for generator
+
+            fake_images = generator(noise, training=True)
+            d_real_output = discriminator(real_images, training=True)
+            d_fake_output = discriminator(fake_images, training=True)
+
+            # Calculate losses
+            d_loss = discriminator_loss(d_real_output, d_fake_output)
+            g_loss = generator_loss(d_fake_output, fake_images, real_images, lambda_reconstruction=lambda_reconstruction)
+
+            # Backpropagation
+            with tf.GradientTape() as tape:
+                grads = tape.gradient(d_loss, discriminator.trainable_variables)
+                optimizer.apply_gradients(zip(grads, discriminator.trainable_variables))
+
+            with tf.GradientTape() as tape:
+                grads = tape.gradient(g_loss, generator.trainable_variables)
+                optimizer.apply_gradients(zip(grads, generator.trainable_variables))
+
+    # Evaluate the SS-GAN on the test dataset for accuracy (or another suitable metric)
+    test_fake_images = generator(tf.random.normal([len(test_dataset), noise_size]), training=False)
+    # Assuming some metric for comparison (e.g., accuracy, precision)
+    accuracy = np.mean(np.abs(test_fake_images - test_dataset))  # Dummy metric, replace with real evaluation
+
+    return accuracy  # This represents the fitness value
+
+# The rest of the ML-ABC class remains the same
+
+
+# Mutual Learning-based Artificial Bee Colony (ML-ABC) Algorithm
+class ML_ABC:
+    def __init__(self, num_bees, num_dimensions, x_min, x_max, max_cycles, F, trial_limit):
+        self.num_bees = num_bees
+        self.num_dimensions = num_dimensions
+        self.x_min = x_min
+        self.x_max = x_max
+        self.max_cycles = max_cycles
+        self.F = F
+        self.trial_limit = trial_limit
+        self.best_solution = None
+        self.best_fitness = np.inf
+        self.population = np.random.rand(num_bees, num_dimensions) * (x_max - x_min) + x_min
+        self.fitness_values = np.array([fitness_function(ind) for ind in self.population])
+        self.trial_count = np.zeros(self.num_bees)  # Counter for unsuccessful iterations
+
+    def employed_bee_phase(self):
+        for i in range(self.num_bees):
+            k = np.random.randint(self.num_bees)
+            while k == i:
+                k = np.random.randint(self.num_bees)
+            
+            for j in range(self.num_dimensions):
+                phi = np.random.uniform(-self.F, self.F)
+                # Update the solution based on fitness comparison between current solution and the selected neighbor
+                if self.fitness_values[i] < self.fitness_values[k]:
+                    self.population[i, j] += phi * (self.population[k, j] - self.population[i, j])
+                else:
+                    self.population[i, j] += phi * (self.population[i, j] - self.population[k, j])
+
+                # Ensure the solution is within the bounds
+                self.population[i, j] = np.clip(self.population[i, j], self.x_min[j], self.x_max[j])
+            
+            # Recalculate fitness
+            new_fitness = fitness_function(self.population[i])
+            if new_fitness < self.fitness_values[i]:
+                self.fitness_values[i] = new_fitness
+                self.trial_count[i] = 0  # Reset trial count if improvement
+            else:
+                self.trial_count[i] += 1
+
+            # Update the best solution found
+            if new_fitness < self.best_fitness:
+                self.best_fitness = new_fitness
+                self.best_solution = self.population[i]
+
+    def onlooker_bee_phase(self):
+        total_fitness = np.sum(self.fitness_values)
+        probabilities = self.fitness_values / total_fitness
+        
+        for i in range(self.num_bees):
+            if np.random.rand() < probabilities[i]:
+                k = np.random.randint(self.num_bees)
+                while k == i:
+                    k = np.random.randint(self.num_bees)
+
+                for j in range(self.num_dimensions):
+                    phi = np.random.uniform(-self.F, self.F)
+                    if self.fitness_values[i] < self.fitness_values[k]:
+                        self.population[i, j] += phi * (self.population[k, j] - self.population[i, j])
+                    else:
+                        self.population[i, j] += phi * (self.population[i, j] - self.population[k, j])
+
+                    # Ensure the solution is within the bounds
+                    self.population[i, j] = np.clip(self.population[i, j], self.x_min[j], self.x_max[j])
+
+                # Recalculate fitness
+                new_fitness = fitness_function(self.population[i])
+                if new_fitness < self.fitness_values[i]:
+                    self.fitness_values[i] = new_fitness
+                    self.trial_count[i] = 0
+                else:
+                    self.trial_count[i] += 1
+
+                # Update the best solution found
+                if new_fitness < self.best_fitness:
+                    self.best_fitness = new_fitness
+                    self.best_solution = self.population[i]
+
+    def scout_bee_phase(self):
+        for i in range(self.num_bees):
+            if self.trial_count[i] > self.trial_limit:
+                # Randomly reinitialize the solution if not improved for 'trial_limit' iterations
+                self.population[i] = np.random.rand(self.num_dimensions) * (self.x_max - self.x_min) + self.x_min
+                self.fitness_values[i] = fitness_function(self.population[i])
+                self.trial_count[i] = 0
+
+    def optimize(self):
+        for cycle in range(self.max_cycles):
+            self.employed_bee_phase()
+            self.onlooker_bee_phase()
+            self.scout_bee_phase()
+            
+            print(f"Cycle {cycle+1}/{self.max_cycles}, Best Fitness: {self.best_fitness}")
+
+        return self.best_solution, self.best_fitness
