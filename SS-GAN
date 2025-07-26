@@ -6,6 +6,63 @@ import numpy as np
 from ML_ABC import ML_ABC  # Import the ML-ABC algorithm
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, confusion_matrix
 from sklearn.metrics import recall_score, precision_score
+import os
+import cv2
+import random
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+def preprocess_images(image_paths, labels, split_ratio=(0.7, 0.15, 0.15), image_size=(224, 224)):
+    """
+    Preprocesses the dataset by splitting it into train, validation, and test sets.
+    Applies image resizing, normalization, and augmentation.
+
+    Args:
+        image_paths: List of image file paths.
+        labels: List of corresponding labels (0 or 1).
+        split_ratio: Tuple indicating the ratio for train, validation, and test sets.
+        image_size: Tuple indicating the desired image size.
+
+    Returns:
+        train_images, val_images, test_images, train_labels, val_labels, test_labels
+    """
+    # Split data into train, validation, and test sets
+    X_train, X_temp, y_train, y_temp = train_test_split(image_paths, labels, test_size=1 - split_ratio[0], stratify=labels)
+    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=split_ratio[2]/(split_ratio[1] + split_ratio[2]), stratify=y_temp)
+
+    # Preprocess images (resize and normalize)
+    def load_and_preprocess(image_path):
+        image = cv2.imread(image_path)  # Load image
+        image = cv2.resize(image, image_size)  # Resize to desired size
+        image = image / 255.0  # Normalize to [0, 1]
+        return image
+    
+    train_images = np.array([load_and_preprocess(image) for image in X_train])
+    val_images = np.array([load_and_preprocess(image) for image in X_val])
+    test_images = np.array([load_and_preprocess(image) for image in X_test])
+
+    # Data augmentation using ImageDataGenerator
+    datagen = ImageDataGenerator(
+        horizontal_flip=True,
+        vertical_flip=True,
+        zoom_range=0.2,
+        rotation_range=15
+    )
+    
+    # Apply augmentation to the training set
+    augmented_train_images = []
+    augmented_train_labels = []
+    for image, label in zip(train_images, y_train):
+        augmented_train_images.append(image)
+        augmented_train_labels.append(label)
+
+        # Create augmented images
+        for _ in range(5):  # Add 5 augmented samples per image
+            augmented_image = datagen.random_transform(image)
+            augmented_train_images.append(augmented_image)
+            augmented_train_labels.append(label)
+
+    return np.array(augmented_train_images), np.array(augmented_train_labels), val_images, y_val, test_images, y_test
 
 # Self-Attention Layer for the Generator and Discriminator
 class SelfAttention(layers.Layer):
